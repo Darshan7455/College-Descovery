@@ -1,0 +1,108 @@
+// Prisma schema for College Discovery Platform (Track B)
+// Design notes (for Loom explanation):
+// - College is the aggregate root. Course/Placement/Review/ExamCutoff hang off it via FK + cascade delete.
+// - Numeric money fields use Int (paise/rupees as integer) to avoid float rounding issues in comparisons.
+// - slug is unique and used as the public identifier in URLs/APIs instead of leaking internal IDs.
+// - ExamCutoff is modeled separately (not on College) because a college has many (exam, category, year) cutoff rows -
+//   this is what the Predictor queries against.
+// - Indexes are added on the columns the search/filter/predictor APIs actually query by.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum CollegeType {
+  GOVERNMENT
+  PRIVATE
+  DEEMED
+}
+
+model College {
+  id              String   @id @default(cuid())
+  slug            String   @unique
+  name            String
+  city            String
+  state           String
+  type            CollegeType
+  feesPerYear     Int      // in INR
+  rating          Float    @default(0) // 0-5, derived/cached from reviews
+  establishedYear Int
+  description     String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  courses       Course[]
+  placements    Placement[]
+  reviews       Review[]
+  examCutoffs   ExamCutoff[]
+
+  @@index([city])
+  @@index([state])
+  @@index([type])
+  @@index([rating])
+  @@index([feesPerYear])
+}
+
+model Course {
+  id         String   @id @default(cuid())
+  collegeId  String
+  name       String
+  durationYears Int
+  feesPerYear   Int
+  seats         Int
+
+  college    College  @relation(fields: [collegeId], references: [id], onDelete: Cascade)
+
+  @@index([collegeId])
+}
+
+model Placement {
+  id               String   @id @default(cuid())
+  collegeId        String
+  year             Int
+  avgPackage       Int      // INR per annum
+  medianPackage    Int
+  highestPackage   Int
+  placementPercent Float    // 0-100
+
+  college          College  @relation(fields: [collegeId], references: [id], onDelete: Cascade)
+
+  @@unique([collegeId, year])
+  @@index([collegeId])
+}
+
+model Review {
+  id         String   @id @default(cuid())
+  collegeId  String
+  rating     Int      // 1-5
+  title      String
+  body       String
+  authorName String
+  createdAt  DateTime @default(now())
+
+  college    College  @relation(fields: [collegeId], references: [id], onDelete: Cascade)
+
+  @@index([collegeId])
+  @@index([createdAt])
+}
+
+// Powers the Predictor tool: given (exam, rank, category) -> colleges where cutoffRank >= rank
+model ExamCutoff {
+  id          String   @id @default(cuid())
+  collegeId   String
+  examName    String   // e.g. "JEE Main", "NEET"
+  category    String   // e.g. "General", "OBC", "SC", "ST", "EWS"
+  year        Int
+  cutoffRank  Int      // worst (highest) rank admitted that year
+
+  college     College  @relation(fields: [collegeId], references: [id], onDelete: Cascade)
+
+  @@unique([collegeId, examName, category, year])
+  @@index([examName, category, year])
+  @@index([cutoffRank])
+}
